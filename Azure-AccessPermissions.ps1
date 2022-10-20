@@ -1,56 +1,18 @@
-## require will be checked even if commented
-## Remove if not needed
-#requires -version 2
 <#
 .SYNOPSIS
-  <Overview of script>
-
-.DESCRIPTION
-  <Brief description of script>
-
-.PARAMETER <Parameter_Name>
-    <Brief description of parameter input required. Repeat this attribute if required>
-
-.INPUTS
-  <Inputs if any, otherwise state None>
-
-.OUTPUTS
-  <Outputs if any, otherwise state None - example: Log file stored in C:\Windows\Temp\<name>.log>
+  Script to enumerate access permissions a user's Azure Active Directory home tenant.
 
 .NOTES
   Version:        1.0
-  Author:         <Name>
-  Creation Date:  <Date>
-  Purpose/Change: Initial script development
+  Author:         0xcsandker
+  Creation Date:  19.10.2022
   
 .EXAMPLE
-  <Example goes here. Repeat this attribute for more than one example>
+  PS:> . .\Azure-AccessPermissions.ps1
+  PS:> Invoke-PermissionCheck
 #>
 
-#---------------------------------------------------------[Param Definition]--------------------------------------------------------
 
-# [CmdletBinding()]
-
-# PARAM ( 
-#     [string]
-#     $InitialDirectory = $(throw "-InitialDirectory is required."),
-
-#     [switch]
-#     $Add = $false,
-
-#     [int]
-#     $PageSize = 200
-# )
-
-#---------------------------------------------------------[Initialisations]--------------------------------------------------------
-
-#Set Error Action - Leave Commented to Throw Errors
-#$ErrorActionPreference = "SilentlyContinue"
-
-#Dot Source required Function Libraries
-#. "C:\Scripts\Functions\Logging_Functions.ps1"
-# Import Modules If Needed
-# Import-Module PSLogging
 
 #----------------------------------------------------------[Declarations]----------------------------------------------------------
 
@@ -64,48 +26,6 @@ $sLogFile = Join-Path -Path $sLogPath -ChildPath $sLogName
 
 #-----------------------------------------------------------[Functions]------------------------------------------------------------
 
-<#
-
-Function <FunctionName>{
-  Param()
-  
-  Begin{
-    ## Define Task Description
-    functionTask = "Some Task"
-    Log-Write -LogPath $sLogFile -LineValue "<description of what is going on>..."
-    ## Use Write-Verbose for debug output
-    Write-Verbose "[*] Task: $functionTask Started"
-  }
-  
-  Process{
-    ## Start Main execution of function here ...
-
-    ## Use Try-Catch Blocks only for defined Error Cases
-    ## Otherwise Erros might not pop up
-    #Try{
-    #  <code goes here>
-    #}
-    
-    Catch [System.OutOfMemoryException]
-    {
-        ## Take action here
-        # Break
-        #Restart-Computer localhost
-        #  Log-Error -LogPath $sLogFile -ErrorDesc $_.Exception -ExitGracefully $True
-        #Write-Verbose "[!] ERROR in Task: $functionTask. Error Message: $._Exception.Message"
-    }
-  }
-  
-  End{
-    If($?){
-      Log-Write -LogPath $sLogFile -LineValue "Completed Successfully."
-      Log-Write -LogPath $sLogFile -LineValue " "
-      Write-Verbose "[*] Task: $functionTask Completed"
-    }
-  }
-}
-
-#>
 
 Function Invoke-PermissionCheck {
     PARAM()
