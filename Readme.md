@@ -25,7 +25,8 @@ Import and run, no argumentes needed.
 
 ```PowerShell
 PS:> Import-Module .\Azure-AccessPermissions.ps1
-PS:> Invoke-PermissionCheck
 ```
 
-![SampleOutput](img/sample_output.png)
+![SampleOutput](img/sample_output1.png)
+
+![SampleOutput](img/sample_output2.png)
