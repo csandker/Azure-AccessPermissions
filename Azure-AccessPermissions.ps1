@@ -3,7 +3,6 @@
   Script to enumerate access permissions of a user's Azure Active Directory home tenant.
 
 .NOTES
-  Version:        0.2
   Author:         0xcsandker
   Creation Date:  19.10.2022
   
@@ -23,7 +22,7 @@
 #----------------------------------------------------------[Declarations]----------------------------------------------------------
 
 # Script Version
-$sScriptVersion = "0.2"
+$sScriptVersion = "0.2.1"
 
 $banner=@"
      _                                _                         ____                     _         _                 
@@ -1009,54 +1008,76 @@ Function Enumerate-AllHighPrivilegePrincipals {
         __AAP-Log "[*] Hang on, this might take a while..."
         ##
         ## Principals with high privileged default directory role
-        ##  Enumerating the Directory TemplateRoles
+        ##  Enumerating all Directory Role Assignments
         ##
+        $nonHighPrivAssignments = @{}
+        $directoryRoleAssignments = Get-MgRoleManagementDirectoryRoleAssignment -All -ExpandProperty "RoleDefinition"
         $progressCount = 0
-        $progressLimit = $highPrivilegedDirectoryRoleTemplatesMap.Keys.Count
-        ForEach($highPrivilegedDirectoryTemplateRoleID in $highPrivilegedDirectoryRoleTemplatesMap.Keys ){
+        $progressLimit = $directoryRoleAssignments.Count
+        ForEach($directoryRoleAssignment in $directoryRoleAssignments ){
             $progressCount += 1
-            $aadRole = $script:gAllMgDirectoryRoles | ? { $_.RoleTemplateId.toUpper() -eq $highPrivilegedDirectoryTemplateRoleID.toUpper() }
-            If( -Not $aadRole ){
-                ## Role not activated in tenant
-                Continue 
-            }
-            $aadDirectoryObjs = Get-MgDirectoryRoleMember -DirectoryRoleId $aadRole.Id -All
-            ForEach($aadDirectoryObj in $aadDirectoryObjs){
-                $principalID = $aadDirectoryObj.Id
-                $principalName = $null
-                $principalType = 'Unknown'
-                $highPrivReason = "High privileged directory Role: $($highPrivilegedDirectoryRoleTemplatesMap[$highPrivilegedDirectoryTemplateRoleID])"
-                If( $aadDirectoryObj.AdditionalProperties ){
-                    $aadDirectoryObjType = $aadDirectoryObj.AdditionalProperties['@odata.type']
-                    Switch($aadDirectoryObjType){
-                        '#microsoft.graph.user' {
-                            $principalType = 'User'
-                            $principalName = $aadDirectoryObj.AdditionalProperties['userPrincipalName']
-                            Break
-                        }
-                        '#microsoft.graph.group' {
-                            $principalType = 'Group'
-                            $principalName = $aadDirectoryObj.AdditionalProperties['displayName']
-                            Break
-                        }
-                        '#microsoft.graph.servicePrincipal' {
-                            $principalType = 'ServicePrincipal'
-                            $principalName = $aadDirectoryObj.AdditionalProperties['appDisplayName']
-                            Break
-                        }
+            
+            $principalID = $directoryRoleAssignment.PrincipalId
+            $templateID = $directoryRoleAssignment.RoleDefinition.TemplateId.toUpper()
+            $principalObjectData = Get-MgDirectoryObjectById -Ids $principalID
+            
+            $principalID = $principalObjectData.Id
+            $principalName = $null
+            $principalType = 'Unknown'
+            $highPrivReason = "High privileged directory Role: $($highPrivilegedDirectoryRoleTemplatesMap[$templateID])"
+            If( $principalObjectData.AdditionalProperties ){
+                $aadDirectoryObjType = $principalObjectData.AdditionalProperties['@odata.type']
+                Switch($aadDirectoryObjType){
+                    '#microsoft.graph.user' {
+                        $principalType = 'User'
+                        $principalName = $principalObjectData.AdditionalProperties['userPrincipalName']
+                        Break
+                    }
+                    '#microsoft.graph.group' {
+                        $principalType = 'Group'
+                        $principalName = $principalObjectData.AdditionalProperties['displayName']
+                        Break
+                    }
+                    '#microsoft.graph.servicePrincipal' {
+                        $principalType = 'ServicePrincipal'
+                        $principalName = $principalObjectData.AdditionalProperties['appDisplayName']
+                        Break
                     }
                 }
-
+            }
+            If( $templateID -In $highPrivilegedDirectoryRoleTemplatesMap.Keys ){
                 ## 100 for Global Administrator, 99 for all others 
                 $confidenceLevel = If( $highPrivilegedDirectoryTemplateRoleID -eq '62E90394-69F5-4237-9190-012177145E10' ){ 100 } Else { 99 }
 
                 __AAP-AddToHighPrivilegePrincipalMap -PrincipalID $principalID -PrincipalName $principalName -Reason $highPrivReason -PrincipalType $principalType -ConfidenceLevel $confidenceLevel
+            }Else {
+                $principalEntries = If( $nonHighPrivAssignments.Keys -Contains $principalID ){ ,$nonHighPrivAssignments.Item($principalID) } Else { ,@() } 
+                $principalEntries += @{
+                    'principalID' = $principalID;
+                    'principalName' = $PrincipalName;
+                    'principalType' = $PrincipalType;
+                    'RoleDisplayName' = $directoryRoleAssignment.RoleDefinition.DisplayName
+                }
+                $nonHighPrivAssignments[$principalID] = $principalEntries
             }
+
             $progressOperation = "$progressCount/$progressLimit"
             $progressPercentage = ($progressCount/$progressLimit)*100
             Write-Progress -Activity "Enumerating High Privilege Principals" -PercentComplete $progressPercentage -CurrentOperation $progressOperation
         }
         Write-Progress -Activity "Enumerating High Privilege Principals" -Status "Ready" -Completed
+        ForEach($principalId in $nonHighPrivAssignments.Keys){
+            $principalEntries = $nonHighPrivAssignments[$principalId]
+            $firstEntry = $principalEntries[0]
+            $principalName = $firstEntry['principalName']
+            $principalType = $firstEntry['principalType']
+            __AAP-Log "[*] $($principalName) ($($principalType)) is assigned the following DirectoryRoles, which are currently not considered high privilege, but might be worth investigating:" -MsgType $MESSAGE_WARNING
+            
+            ForEach($principalEntry in $principalEntries){
+                $roleDisplayName = $principalEntry['RoleDisplayName']
+                __AAP-Log "  $($roleDisplayName)"
+            }
+        }
         
         ## 
         ## Groups
