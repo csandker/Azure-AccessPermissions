@@ -22,7 +22,7 @@
 #----------------------------------------------------------[Declarations]----------------------------------------------------------
 
 # Script Version
-$sScriptVersion = "0.2.1"
+$sScriptVersion = "0.2.2"
 
 $banner=@"
      _                                _                         ____                     _         _                 
@@ -47,6 +47,22 @@ $banner=@"
     Enumerate-MFAStatusOfHighPrivilegePrincipals    ## Check the MFA Status of all high privileged principals
 "@
 
+$wellKnownApplicationIDs = @{
+    ## NOTE: THIS is not a complete list, but rather an add-on-the-go-list
+    ### I don't want this script to be too bloated
+    "00000002-0000-0ff1-ce00-000000000000" = "Exchange Online";
+    "00000003-0000-0ff1-ce00-000000000000" = "SharePoint Online";
+    "00000004-0000-0ff1-ce00-000000000000" = "Skype for Business online";
+    "0000000a-0000-0000-c000-000000000000" = "DeviceManagementApp (Microsoft Intune)";
+    "1b730954-1685-4b74-9bfd-dac224a7b894" = "MS Graph API";
+    "a0c73c16-a7e3-4564-9a95-2bdf47383716" = "MS Exchange Remote PowerShell";
+    "1fec8e78-bce4-4aaf-ab1b-5451cc387264" = "MS Teams";
+    "d3590ed6-52b3-4102-aeff-aad2292ab01c" = "Microsoft Support and Recovery Assistant (SARA)";
+    "ab9b8c07-8f02-4f72-87fa-80105867a763" = "OneDrive Sync Engine";
+    "de0853a1-ab20-47bd-990b-71ad5077ac7b" = "Windows Configuration Designer (WCD)";
+    "d4ebce55-015a-49b5-a083-c84d1797ae8c" = "Microsoft Intune Enrollment"
+}
+
 #-----------------------------------------------------------[Functions]------------------------------------------------------------
 
 $MESSAGE_SUCCESS = '0'
@@ -62,7 +78,10 @@ Function __AAP-Log {
         $MsgType = '',
 
         [Int]
-        $IndentationLevel = 0
+        $IndentationLevel = 0,
+
+        [Switch]
+        $NoNewLine = $false
 
     )
     Process {
@@ -71,37 +90,41 @@ Function __AAP-Log {
         {
             $MESSAGE_SUCCESS {
                 $host.UI.RawUI.ForegroundColor = "Green"
-                Write-Host "$(' '*$IndentationLevel)$($Msg)" 
+                Write-Host "$(' '*$IndentationLevel)$($Msg)" -NoNewline:$NoNewLine
                 $host.UI.RawUI.ForegroundColor = $initalFC
                 break
             }
             $MESSAGE_FAIL {
                 $host.UI.RawUI.ForegroundColor = "Red"
-                Write-Host "$(' '*$IndentationLevel)$($Msg)" 
+                Write-Host "$(' '*$IndentationLevel)$($Msg)" -NoNewline:$NoNewLine
                 $host.UI.RawUI.ForegroundColor = $initalFC
                 break
             }
             $MESSAGE_WARNING {
                 $host.UI.RawUI.ForegroundColor = "Yellow"
-                Write-Host "$(' '*$IndentationLevel)$($Msg)" 
+                Write-Host "$(' '*$IndentationLevel)$($Msg)" -NoNewline:$NoNewLine
                 $host.UI.RawUI.ForegroundColor = $initalFC
                 break
             }
             $MESSAGE_INFO {
                 $host.UI.RawUI.ForegroundColor = "Cyan"
-                Write-Host "$(' '*$IndentationLevel)$($Msg)" 
+                Write-Host "$(' '*$IndentationLevel)$($Msg)" -NoNewline:$NoNewLine
                 $host.UI.RawUI.ForegroundColor = $initalFC
                 break
             }
             default {
                 $host.UI.RawUI.ForegroundColor = "DarkGray"
-                Write-Host "$(' '*$IndentationLevel)$($Msg)" 
+                Write-Host "$(' '*$IndentationLevel)$($Msg)" -NoNewline:$NoNewLine
                 $host.UI.RawUI.ForegroundColor = $initalFC
                 break
             }
         }
         if( $Outfile ){
-            $Msg | Out-File -Append -FilePath $Outfile
+            $script:gOutFileMessageBuffer += $Msg
+            If(-Not $NoNewLine) {
+                "$(' '*$IndentationLevel)$($script:gOutFileMessageBuffer)" | Out-File -Append -FilePath $Outfile
+                $script:gOutFileMessageBuffer = ""
+            }
         }
     }
 }
@@ -244,7 +267,6 @@ Function __AAP-DisplayDirectoryRoleAssignment {
 Function __AAP-DisplayHighPrivilegePrincipalMap {
     PARAM()
     Process {
-        $global:fuk = $script:gHighPrivilegdPrincipalMap
         __AAP-Log "## High Privileged Principals "
         __AAP-Log "[*] Number of high privileged Accounts: $($script:gHighPrivilegdPrincipalMap.Keys.Count)" -MsgType $MESSAGE_WARNING
         ForEach($principalID in $script:gHighPrivilegdPrincipalMap.Keys){
@@ -263,6 +285,231 @@ Function __AAP-DisplayHighPrivilegePrincipalMap {
                     __AAP-Log "  Reason: $($principalEntry['Reason']) (Confidence: $($principalEntry['ConfidenceLevel'])/100)" -MsgType $MESSAGE_INFO
                 }
             }
+        }
+    }
+}
+
+Function __AAP-ResolveDirectoryObjectByID {
+    PARAM(
+        [String]
+        $ObjectID
+    )
+    Process {
+        $returnValue = "$($ObjectID)"
+        $directoryObject = Get-MgDirectoryObjectById -Ids $ObjectID -ErrorAction SilentlyContinue
+        If($directoryObject){
+            $aadDirectoryObjType = $directoryObject.AdditionalProperties['@odata.type']
+            Switch($aadDirectoryObjType){
+                '#microsoft.graph.user' {
+                    $returnValue = "$($directoryObject.AdditionalProperties['userPrincipalName']) (User)"
+                    Break
+                }
+                '#microsoft.graph.group' {
+                    $returnValue = "$($directoryObject.AdditionalProperties['displayName']) (Group)"
+                    Break
+                }
+                '#microsoft.graph.servicePrincipal' {
+                    $returnValue = "$($directoryObject.AdditionalProperties['appDisplayName']) (ServicePrincipal)"
+                    Break
+                }
+            }
+        }
+        Else {
+            ## Check if well known Application
+            If( $wellKnownApplicationIDs.Keys -Contains $ObjectID ){
+                $returnValue = "$($wellKnownApplicationIDs[$ObjectID]) (Application)"
+            }
+        }
+        return $returnValue
+    }
+}
+
+Function __AAP-DisplayApplicableMFAConditionalAccessPolicyForUserID {
+    PARAM(
+        [Parameter()]
+        [String]
+        $UserID,
+
+        [Int]
+        $IndentationLevel = 0
+    )
+    Begin {
+        If( -Not $script:gActiveMFAConditionalAccessPolicies ){
+            $script:gActiveMFAConditionalAccessPolicies = Get-MgIdentityConditionalAccessPolicy -All | ?{ $_.State -ne "disabled" -And $_.GrantControls.BuiltInControls -Contains "mfa" }
+        }
+    }
+    Process {
+        $usersGroups = Get-MgUserMemberOf -UserId $UserID -All
+        $applicablePoliciesCount = 0
+        ForEach($conditionalAccessPolicy in $script:gActiveMFAConditionalAccessPolicies){
+            $policyApplies = $false
+            ## Check Excludes
+            ### Excluded by Group
+            If($conditionalAccessPolicy.Conditions.users.ExcludeGroups | ?{ $usersGroups.Id -Contains "$_" } ){
+                ## Write-Verbose "[*] Group Policy exlcuded by group membership: $($conditionalAccessPolicy.DisplayName)"
+                Continue
+            }
+            ### Excluded by User
+            If($conditionalAccessPolicy.Conditions.users.ExcludeUsers -Contains $UserID ) {
+                ## Write-Verbose "[*] Group Policy exlcuded by group user: $($conditionalAccessPolicy.DisplayName)"
+                Continue
+            }
+            ### Excluded by Role
+            If($conditionalAccessPolicy.Conditions.users.ExcludeRoles) {
+                $excludedRoles = $conditionalAccessPolicy.Conditions.Users.ExcludeRoles
+                ForEach($excludedRole in $excludedRoles){
+                    If( ( Get-MgRoleManagementDirectoryRoleAssignment -Filter "(RoleDefinitionId eq '$($excludedRole)') and (PrincipalId eq '$($UserID)')") ){
+                        #Write-Verbose "[*] Group Policy exlcuded by group role: $($conditionalAccessPolicy.DisplayName)"
+                        Continue
+                    }
+                }
+            }
+
+            ## Check Includes
+            ### Inclue by Group
+            If($conditionalAccessPolicy.Conditions.users.IncludeGroups | ?{ $usersGroups.Id -Contains "$_" } ){
+                #Write-Verbose "[+] Group Policy applies by Group: $($conditionalAccessPolicy.DisplayName)" -ForegroundColor DarkGreen
+                $policyApplies = $true
+            }
+            ### Excluse by User
+            If(
+                ( $conditionalAccessPolicy.Conditions.users.IncludeUsers -Contains "All") -Or
+                ( $conditionalAccessPolicy.Conditions.users.IncludeUsers -Contains $UserID )
+            ){
+                #Write-Verbose "[+] Group Policy applies by User: $($conditionalAccessPolicy.DisplayName)" -ForegroundColor DarkGreen
+                $policyApplies = $true
+            }
+            ### Excluse by Role
+            If($conditionalAccessPolicy.Conditions.users.IncludeRoles) {
+                $includeRoles = $conditionalAccessPolicy.Conditions.Users.IncludeRoles
+                ForEach($includeRole in $includeRoles){
+                    If( ( Get-MgRoleManagementDirectoryRoleAssignment -Filter "(RoleDefinitionId eq '$($includeRole)') and (PrincipalId eq '$($UserID)')") ){
+                        #Write-Verbose "[+] Group Policy applies by group role: $($conditionalAccessPolicy.DisplayName)" -ForegroundColor DarkGreen
+                        $policyApplies = $true
+                    }
+                }
+            }
+
+            If($policyApplies){
+                $applicablePoliciesCount += 1
+                __AAP-Log "[+] $($conditionalAccessPolicy.DisplayName)" -MsgType $MESSAGE_SUCCESS -IndentationLevel $IndentationLevel
+                ## Grant Controls
+                If( $conditionalAccessPolicy.GrantControls.BuiltInControls -eq "block" ){
+                    ## It should not be possible to set controls to "block" AND "mfa"
+                    ### Therefore this is just a saftey net 
+                    __AAP-Log "==> Block access" -MsgType $MESSAGE_INFO -IndentationLevel $IndentationLevel
+                } ElseIf ($conditionalAccessPolicy.GrantControls.BuiltInControls.Count) {
+                    __AAP-Log "==> Grant access " -NoNewline -MsgType $MESSAGE_INFO -IndentationLevel $IndentationLevel
+                    If( $conditionalAccessPolicy.GrantControls.BuiltInControls.Count ){
+                        __AAP-Log "IF [ " -NoNewline -MsgType $MESSAGE_INFO
+                        ForEach($bultInControl in $conditionalAccessPolicy.GrantControls.BuiltInControls){
+                            If( ($conditionalAccessPolicy.GrantControls.BuiltInControls.IndexOf($bultInControl) % 2) -ne 0 ){
+                                __AAP-Log "$($conditionalAccessPolicy.GrantControls.Operator) " -NoNewline -MsgType $MESSAGE_INFO
+                            }
+                            __AAP-Log "$($bultInControl) " -NoNewline -MsgType $MESSAGE_INFO
+                        }
+                        __AAP-Log "]" -MsgType $MESSAGE_INFO -IndentationLevel $IndentationLevel
+                    } Else {
+                        __AAP-Log "" -MsgType $MESSAGE_INFO -IndentationLevel $IndentationLevel ## newline
+                    }
+                }
+                ## Session Controls
+                If( $conditionalAccessPolicy.SessionControls.ApplicationEnforcedRestrictions.IsEnabled ){
+                    __AAP-Log "--> Session Control: Use app enforced restrictions" -MsgType $MESSAGE_INFO -IndentationLevel $IndentationLevel
+                }
+                If( $conditionalAccessPolicy.SessionControls.CloudAppSecurity.IsEnabled ){
+                    __AAP-Log "--> Session Control: CloudAppSecurity (Type: $($conditionalAccessPolicy.SessionControls.CloudAppSecurity.CloudAppSecurityType))" -MsgType $MESSAGE_INFO -IndentationLevel $IndentationLevel
+                }
+                If( $conditionalAccessPolicy.SessionControls.ContinuousAccessEvaluation.Mode ){
+                    __AAP-Log "--> Session Control: Customize continuous access evaluation (Mode: $($conditionalAccessPolicy.SessionControls.ContinuousAccessEvaluation.Mode))" -MsgType $MESSAGE_INFO -IndentationLevel $IndentationLevel
+                }
+                If( $conditionalAccessPolicy.SessionControls.DisableResilienceDefaults ){
+                    __AAP-Log "--> Session Control: Disable resilience defaults" -MsgType $MESSAGE_INFO -IndentationLevel $IndentationLevel
+                }
+                If( $conditionalAccessPolicy.SessionControls.PersistentBrowser.IsEnabled ){
+                    __AAP-Log "--> Session Control: Persistent browser session" -MsgType $MESSAGE_INFO -IndentationLevel $IndentationLevel
+                }
+                If( $conditionalAccessPolicy.SessionControls.SignInFrequency.IsEnabled ){
+                    __AAP-Log "--> Session Control: Sign-in frequency" -MsgType $MESSAGE_INFO -IndentationLevel $IndentationLevel
+                    __AAP-Log "    $($conditionalAccessPolicy.SessionControls.SignInFrequency.Value) $($conditionalAccessPolicy.SessionControls.SignInFrequency.Type) ($($conditionalAccessPolicy.SessionControls.SignInFrequency.FrequencyInterval))" -MsgType $MESSAGE_INFO -IndentationLevel $IndentationLevel
+                }
+
+
+                ## Applications
+                ForEach($excludedApplication in $conditionalAccessPolicy.Conditions.Applications.ExcludeApplications){
+                    ## Values could be "All", "<AppName>", "<ID>"
+                    $excludedApp = __AAP-ResolveDirectoryObjectByID $excludedApplication
+                    __AAP-Log "  Excluded Application: $($excludedApp)" -MsgType $MESSAGE_INFO -IndentationLevel $IndentationLevel
+                }
+                ForEach($includedApplication in $conditionalAccessPolicy.Conditions.Applications.IncludeApplications){
+                    ## Values could be "All", "<AppName>", "<ID>"
+                    $includeApp = __AAP-ResolveDirectoryObjectByID $includedApplication
+                    __AAP-Log "  Included Application: $($includeApp)" -MsgType $MESSAGE_INFO -IndentationLevel $IndentationLevel
+                }
+                If( $conditionalAccessPolicy.Conditions.Applications.IncludeAuthenticationContextClassReferences ){
+                    __AAP-Log "TODO IncludeAuthenticationContextClassReferences: $($conditionalAccessPolicy.Conditions.Applications.IncludeAuthenticationContextClassReferences )" -MsgType $MESSAGE_INFO -IndentationLevel $IndentationLevel
+                }
+                If( $conditionalAccessPolicy.Conditions.Applications.IncludeUserActions ){
+                    __AAP-Log "TODO IncludeUserActions: $($conditionalAccessPolicy.Conditions.Applications.IncludeUserActions )" -MsgType $MESSAGE_INFO -IndentationLevel $IndentationLevel
+                }
+                If( $conditionalAccessPolicy.Conditions.Applications.AdditionalProperties.Count ){
+                    __AAP-Log "TODO AdditionalProperties: $($conditionalAccessPolicy.Conditions.Applications.AdditionalProperties | fl )" -MsgType $MESSAGE_INFO -IndentationLevel $IndentationLevel
+                }
+                ## ClientApps
+                __AAP-Log "  Client Apps: " -NoNewline -MsgType $MESSAGE_INFO -IndentationLevel $IndentationLevel
+                ForEach($clientApp in $conditionalAccessPolicy.Conditions.ClientAppTypes){
+                    If( ($conditionalAccessPolicy.Conditions.ClientAppTypes.IndexOf($clientApp) % 2) -ne 0 ){
+                        __AAP-Log ", " -NoNewline -MsgType $MESSAGE_INFO
+                    }
+                    __AAP-Log "$($clientApp)" -NoNewline -MsgType $MESSAGE_INFO
+                }
+                __AAP-Log "" -MsgType $MESSAGE_INFO -IndentationLevel $IndentationLevel ## new line
+                ## Devices
+                If( $conditionalAccessPolicy.Conditions.Devices.ExcludeDeviceStates ){
+                    __AAP-Log "  Excluded Device States: $($conditionalAccessPolicy.Conditions.Devices.ExcludeDeviceState)" -MsgType $MESSAGE_INFO -IndentationLevel $IndentationLevel
+                }
+                If( $conditionalAccessPolicy.Conditions.Devices.ExcludeDevices ){
+                    __AAP-Log "  Excluded Devices: $($conditionalAccessPolicy.Conditions.Devices.ExcludeDevices)" -MsgType $MESSAGE_INFO -IndentationLevel $IndentationLevel
+                }
+                If( $conditionalAccessPolicy.Conditions.Devices.IncludeDeviceStates ){
+                    __AAP-Log "  Included Device States: $($conditionalAccessPolicy.Conditions.Devices.IncludeDeviceStates)" -MsgType $MESSAGE_INFO -IndentationLevel $IndentationLevel
+                }
+                If( $conditionalAccessPolicy.Conditions.Devices.IncludeDevices ){
+                    __AAP-Log "  Included Devices: $($conditionalAccessPolicy.Conditions.Devices.IncludeDevices)" -MsgType $MESSAGE_INFO -IndentationLevel $IndentationLevel
+                }
+                ## Locations
+                If( $conditionalAccessPolicy.Conditions.Locations.ExcludeLocations ){
+                    __AAP-Log "  Excluded Locations: $($conditionalAccessPolicy.Conditions.Locations.ExcludeLocations)" -MsgType $MESSAGE_INFO -IndentationLevel $IndentationLevel
+                }
+                If( $conditionalAccessPolicy.Conditions.Locations.IncludeLocations ){
+                    __AAP-Log "  Included Locations: $($conditionalAccessPolicy.Conditions.Locations.IncludeLocations)" -MsgType $MESSAGE_INFO -IndentationLevel $IndentationLevel
+                }
+                ## Plattforms
+                If( $conditionalAccessPolicy.Conditions.Platforms.ExcludePlatforms ){
+                    __AAP-Log "  Excluded Plattforms: $($conditionalAccessPolicy.Conditions.Platforms.ExcludeLocations)" -MsgType $MESSAGE_INFO -IndentationLevel $IndentationLevel
+                }
+                If( $conditionalAccessPolicy.Conditions.Platforms.IncludePlatforms ){
+                    __AAP-Log "  Included Plattforms: $($conditionalAccessPolicy.Conditions.Platforms.IncludePlatforms)" -MsgType $MESSAGE_INFO -IndentationLevel $IndentationLevel
+                }
+                ## ServicePrincipalRiskLevels
+                If( $conditionalAccessPolicy.Conditions.ServicePrincipalRiskLevels.Count ){
+                    __AAP-Log "  TODO: ServicePrincipalRiskLevels" -MsgType $MESSAGE_INFO -IndentationLevel $IndentationLevel
+                }
+                ## SignInRiskLevels
+                If( $conditionalAccessPolicy.Conditions.SignInRiskLevels.Count ){
+                    __AAP-Log "  TODO: SignInRiskLevels" -MsgType $MESSAGE_INFO -IndentationLevel $IndentationLevel
+                }
+                ## UserRiskLevels
+                If( $conditionalAccessPolicy.Conditions.UserRiskLevels.Count ){
+                    __AAP-Log "  TODO: UserRiskLevels" -MsgType $MESSAGE_INFO -IndentationLevel $IndentationLevel
+                }
+            }
+
+            #Write-Host "[+] Group Policy applies ??? last call : $($conditionalAccessPolicy.DisplayName)" -ForegroundColor DarkGreen
+        }
+        If( $applicablePoliciesCount -eq 0 ){
+            ## No policy applies
+            __AAP-Log "  -- No MFA Conditional Access Policy applies for this user --" -MsgType $MESSAGE_INFO -IndentationLevel $IndentationLevel
         }
     }
 }
@@ -1454,22 +1701,26 @@ Function Enumerate-MFAStatusOfHighPrivilegePrincipals {
             $firstEntry = $principalEntries[0]
             
             If( $firstEntry['principalType'] -eq 'User' ){
+                ## Per User MFA
                 $userMFAStatus = Get-AADIntUserMFA -AccessToken $accessTokenAADGraph -UserPrincipalName $principalID -ErrorAction SilentlyContinue
                 If( $userMFAStatus ){
                     $mfaDefaultMethod = $userMFAStatus.DefaultMethod
                     If( $userMFAStatus.State -eq "Enforced" ){
-                        __AAP-Log "[+] User: $($firstEntry['principalName']) ($($firstEntry['principalID'])): MFA Enforced (Defaullt Method: $mfaDefaultMethod)"  -MsgType $MESSAGE_SUCCESS
+                        __AAP-Log "[+] User: $($firstEntry['principalName']) ($($firstEntry['principalID'])): Per User MFA Enforced (Defaullt Method: $mfaDefaultMethod)"  -MsgType $MESSAGE_SUCCESS
                     }
                     ElseIf( $userMFAStatus.State -eq "Enabled" ){
-                        __AAP-Log "[!] User: $($firstEntry['principalName']) ($($firstEntry['principalID'])): MFA Enabled, but not enforced (Defaullt Method: $mfaDefaultMethod)"  -MsgType $MESSAGE_WARNING
+                        __AAP-Log "[!] User: $($firstEntry['principalName']) ($($firstEntry['principalID'])): Per User MFA Enabled, but not enforced (Defaullt Method: $mfaDefaultMethod)"  -MsgType $MESSAGE_WARNING
                     }
                     ElseIf( $userMFAStatus.State -eq "Disabled" ){
-                        __AAP-Log "[!] User: $($firstEntry['principalName']) ($($firstEntry['principalID'])): MFA Disabled."  -MsgType $MESSAGE_WARNING
+                        __AAP-Log "[!] User: $($firstEntry['principalName']) ($($firstEntry['principalID'])): Per User MFA Disabled."  -MsgType $MESSAGE_WARNING
                     }
                     Else {
-                        __AAP-Log "[?] User: $($firstEntry['principalName']) ($($firstEntry['principalID'])): MFA status unknown/unset."  -MsgType $MESSAGE_WARNING
+                        __AAP-Log "[?] User: $($firstEntry['principalName']) ($($firstEntry['principalID'])): Per User MFA status unknown/unset."  -MsgType $MESSAGE_WARNING
                     }
                 }
+                ## Conditional Access Policies
+                __AAP-Log "[*] Applicable MFA Conditional Access Policies for this user:"  -MsgType $MESSAGE_INFO
+                __AAP-DisplayApplicableMFAConditionalAccessPolicyForUserID -UserID $principalID -IndentationLevel 1
             }
             Else {
                 __AAP-Log "[X] $($firstEntry['principalType']): $($firstEntry['principalName']) ($($firstEntry['principalID'])): MFA is not supported for $($firstEntry['principalType'])s."  -MsgType $MESSAGE_FAIL
