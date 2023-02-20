@@ -656,7 +656,7 @@ Function __AAP-ConnectAllResources {
     Process {
         __AAP-Log "[*] Connecting to Microsoft Graph..."
         $accessTokenMSGraph = __AAP-ConnectMicrosoftGraph -Tenant $Tenant
-        __AAP-Log "[*] Connecting to AzueAD Graph..."
+        __AAP-Log "[*] Connecting to AzureAD Graph..."
         $graphContext = Get-MgContext
         Connect-AzureAD -AccountId $graphContext.Account | Out-Null
     }
