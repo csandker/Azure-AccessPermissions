@@ -129,6 +129,21 @@ Function __AAP-Log {
     }
 }
 
+Function __APP-DateTimeToString {
+    PARAM(
+        [Parameter()]
+        [DateTime]
+        $DateTime
+    )
+    Process {
+        If( $DateTime.getType() -eq [DateTime] ){
+            return $DateTime.GetDateTimeFormats('D')[-1]
+        }Else {
+            return $DateTime
+        }
+    }
+}
+
 Function __AAP-AppRoleIsHighPrivilegeConfidenceGuess {
     PARAM(
         [Object]
@@ -237,6 +252,8 @@ Function __AAP-GetHighPrivilegedDirectoryRoleTemplateMap {
             '194AE4CB-B126-40B2-BD5B-6091B380977D' = 'Security administrator';
             'F28A1F50-F6E7-4571-818B-6A12F2AF6B6C' = 'SharePoint administrator';
             'FE930BE7-5E62-47DB-91AF-98C3A49A38B1' = 'User administrator';
+            '3A2C62DB-5318-420D-8D74-23AFFEE5D9D5' = 'Intune Administrator';
+            '9F06204D-73C1-4D4C-880A-6EDB90606FD8' = 'Azure AD Joined Device Local Administrator';
 
             ## 'F2EF992C-3AFB-46B9-B7CF-A126EE74C451' = 'Global Reader';
         }
@@ -641,7 +658,7 @@ Function __AAP-ConnectAllResources {
         $accessTokenMSGraph = __AAP-ConnectMicrosoftGraph -Tenant $Tenant
         __AAP-Log "[*] Connecting to AzueAD Graph..."
         $graphContext = Get-MgContext
-        Connect-AzureAD -AccountId $graphContext.Account
+        Connect-AzureAD -AccountId $graphContext.Account | Out-Null
     }
 }
 
@@ -760,7 +777,15 @@ Function __AAP-CheckIfMemberOfPrivilegedDirectoryRole {
 
         [Parameter()]
         [Switch]
-        $AssignedViaPIM = $false
+        $AssignedViaPIM = $false,
+
+        [Parameter()]
+        [Object]
+        $PIMAssignmentEndDateTime,
+
+        [Parameter()]
+        [String]
+        $PIMAssignmentState
     )
     Begin {
         If( $TemplateName -eq "" ){
@@ -783,7 +808,19 @@ Function __AAP-CheckIfMemberOfPrivilegedDirectoryRole {
             $principalType = 'Unknown'
             $highPrivReason = "High privileged directory Role assigned: $($highPrivilegedDirectoryRoleTemplatesMap[$templateID])"
             If( $AssignedViaPIM ){
-                $highPrivReason = "High privileged directory Role assigned (via PIM): $($highPrivilegedDirectoryRoleTemplatesMap[$templateID])"
+                If( $PIMAssignmentEndDateTime ){
+                    $endDateStr = __APP-DateTimeToString -DateTime $PIMAssignmentEndDateTime
+                    $highPrivReason = "High privileged directory Role assigned (via time-based PIM assignment, ending $($endDateStr)): $($highPrivilegedDirectoryRoleTemplatesMap[$templateID])"
+                    If( $PIMAssignmentState ){
+                        $highPrivReason = "High privileged directory Role assigned (via $($PIMAssignmentState) time-based PIM assignment, ending $($endDateStr)): $($highPrivilegedDirectoryRoleTemplatesMap[$templateID])"
+                    }
+                }
+                Else {
+                    $highPrivReason = "High privileged directory Role assigned (via permanent PIM assignment): $($highPrivilegedDirectoryRoleTemplatesMap[$templateID])"
+                    If( $PIMAssignmentState ){
+                        $highPrivReason = "High privileged directory Role assigned (via $($PIMAssignmentState) permanent PIM assignment): $($highPrivilegedDirectoryRoleTemplatesMap[$templateID])"
+                    }
+                }
             }
             If( $principalObjectData.AdditionalProperties ){
                 ## Resolve principal
@@ -809,7 +846,18 @@ Function __AAP-CheckIfMemberOfPrivilegedDirectoryRole {
                                 $groupMemberObjType = $mgGroupMember.AdditionalProperties['@odata.type']
                                 $highPrivReason = "Member of group ($($mgGroup.DisplayName)) with high privileged directory Role: $($highPrivilegedDirectoryRoleTemplatesMap[$templateID])"
                                 If( $AssignedViaPIM ){
-                                    $highPrivReason = "Member of group ($($mgGroup.DisplayName)) with high privileged directory Role (via PIM): $($highPrivilegedDirectoryRoleTemplatesMap[$templateID])"
+                                    If( $PIMAssignmentEndDateTime ){
+                                        $endDateStr = __APP-DateTimeToString -DateTime $PIMAssignmentEndDateTime
+                                        $highPrivReason = "Member of group ($($mgGroup.DisplayName)) with high privileged directory Role (via time-based PIM assignment, ending $($endDateStr)): $($highPrivilegedDirectoryRoleTemplatesMap[$templateID])"
+                                        If( $PIMAssignmentState ){
+                                            $highPrivReason = "Member of group ($($mgGroup.DisplayName)) with high privileged directory Role (via $($PIMAssignmentState) time-based PIM assignment, ending $($endDateStr)): $($highPrivilegedDirectoryRoleTemplatesMap[$templateID])"
+                                        }
+                                    }Else {
+                                        $highPrivReason = "Member of group ($($mgGroup.DisplayName)) with high privileged directory Role (via permanent PIM assignment): $($highPrivilegedDirectoryRoleTemplatesMap[$templateID])"
+                                        If( $PIMAssignmentState ){
+                                            $highPrivReason = "Member of group ($($mgGroup.DisplayName)) with high privileged directory Role (via $($PIMAssignmentState) permanent PIM assignment): $($highPrivilegedDirectoryRoleTemplatesMap[$templateID])"
+                                        }
+                                    }
                                 }
                                 Switch($groupMemberObjType){
                                     '#microsoft.graph.user' {
@@ -844,7 +892,21 @@ Function __AAP-CheckIfMemberOfPrivilegedDirectoryRole {
             If( $principalEntries.Keys -NotContains $PrincipalID ){
                 $principalDisplayStr = __AAP-ResolveDirectoryObjectByID -ObjectID $PrincipalID
                 If( $AssignedViaPIM ){
-                    $principalDisplayStr += " [[ Assigned via PIM ]]"
+                    If( $PIMAssignmentEndDateTime ){
+                        $endDateStr = __APP-DateTimeToString -DateTime $PIMAssignmentEndDateTime
+                        If( $PIMAssignmentState ){
+                            $principalDisplayStr += " [[ Assigned via $($PIMAssignmentState) PIM assignment (ends '$($endDateStr)') ]]"
+                        }Else {
+                            $principalDisplayStr += " [[ Assigned via PIM assignment (ends '$($endDateStr)') ]]"
+                        }
+                    }
+                    Else {
+                        If( $PIMAssignmentState ){
+                            $principalDisplayStr += " [[ Assigned via $($PIMAssignmentState) PIM assignment (permanent) ]]"
+                        }Else {
+                            $principalDisplayStr += " [[ Assigned via PIM assignment (permanent) ]]"
+                        }
+                    }
                 }
                 $principalEntries += @($principalDisplayStr)
             }
@@ -1423,64 +1485,11 @@ Function Enumerate-AllHighPrivilegePrincipals {
             
             __AAP-CheckIfMemberOfPrivilegedDirectoryRole -PrincipalID $principalID -NonHighPrivilegedRoleAssignments $nonHighPrivAssignments -TemplateID $templateID -TemplateName $templateName
 
-            # $principalObjectData = Get-MgDirectoryObjectById -Ids $principalID
-            # $principalID = $principalObjectData.Id
-            # $principalName = $null
-            # $principalType = 'Unknown'
-            # $highPrivReason = "High privileged directory Role: $($highPrivilegedDirectoryRoleTemplatesMap[$templateID])"
-            # If( $principalObjectData.AdditionalProperties ){
-            #     $aadDirectoryObjType = $principalObjectData.AdditionalProperties['@odata.type']
-            #     Switch($aadDirectoryObjType){
-            #         '#microsoft.graph.user' {
-            #             $principalType = 'User'
-            #             $principalName = $principalObjectData.AdditionalProperties['userPrincipalName']
-            #             Break
-            #         }
-            #         '#microsoft.graph.group' {
-            #             $principalType = 'Group'
-            #             $principalName = $principalObjectData.AdditionalProperties['displayName']
-            #             Break
-            #         }
-            #         '#microsoft.graph.servicePrincipal' {
-            #             $principalType = 'ServicePrincipal'
-            #             $principalName = $principalObjectData.AdditionalProperties['appDisplayName']
-            #             Break
-            #         }
-            #     }
-            # }
-            # If( $templateID -In $highPrivilegedDirectoryRoleTemplatesMap.Keys ){
-            #     ## 100 for Global Administrator, 99 for all others 
-            #     $confidenceLevel = If( $highPrivilegedDirectoryTemplateRoleID -eq '62E90394-69F5-4237-9190-012177145E10' ){ 100 } Else { 99 }
-
-            #     __AAP-AddToHighPrivilegePrincipalMap -PrincipalID $principalID -PrincipalName $principalName -Reason $highPrivReason -PrincipalType $principalType -ConfidenceLevel $confidenceLevel
-            # }Else {
-            #     $principalEntries = If( $nonHighPrivAssignments.Keys -Contains $principalID ){ ,$nonHighPrivAssignments.Item($principalID) } Else { ,@() } 
-            #     $principalEntries += @{
-            #         'principalID' = $principalID;
-            #         'principalName' = $PrincipalName;
-            #         'principalType' = $PrincipalType;
-            #         'RoleDisplayName' = $directoryRoleAssignment.RoleDefinition.DisplayName
-            #     }
-            #     $nonHighPrivAssignments[$principalID] = $principalEntries
-            # }
-
             $progressOperation = "$progressCount/$progressLimit"
             $progressPercentage = ($progressCount/$progressLimit)*100
             Write-Progress -Activity "Enumerating High Privileged Directory Role Assignments" -PercentComplete $progressPercentage -CurrentOperation $progressOperation
         }
         Write-Progress -Activity "Enumerating High Privileged Directory Role Assignments" -Status "Ready" -Completed
-        # ForEach($principalId in $nonHighPrivAssignments.Keys){
-        #     $principalEntries = $nonHighPrivAssignments[$principalId]
-        #     $firstEntry = $principalEntries[0]
-        #     $principalName = $firstEntry['principalName']
-        #     $principalType = $firstEntry['principalType']
-        #     __AAP-Log "[*] $($principalName) ($($principalType)) is assigned the following DirectoryRoles, which are currently not considered high privilege, but might be worth investigating:" -MsgType $MESSAGE_WARNING
-            
-        #     ForEach($principalEntry in $principalEntries){
-        #         $roleDisplayName = $principalEntry['RoleDisplayName']
-        #         __AAP-Log "  $($roleDisplayName)"
-        #     }
-        # }
 
         ##
         ## Principals with high privileged PIM assigned directory role
@@ -1499,79 +1508,17 @@ Function Enumerate-AllHighPrivilegePrincipals {
             ){
                 ## Active assginment
                 $privRoleDefinition = $azureADPrivRoleDefinitions | ? { $_.Id -eq $azureADPrivRoleAssignment.RoleDefinitionId } | Select-Object -First 1
-
                 If( $privRoleDefinition ){
-                    __AAP-CheckIfMemberOfPrivilegedDirectoryRole -PrincipalID $azureADPrivRoleAssignment.SubjectId -NonHighPrivilegedRoleAssignments $nonHighPrivAssignments -TemplateID $privRoleDefinition.ExternalId -TemplateName $privRoleDefinition.DisplayName -AssignedViaPIM
-
-
-
-
-                    # $templateID = $privRoleDefinition.ExternalId.toUpper()
-                    # If( $templateID -In $highPrivilegedDirectoryRoleTemplatesMap.Keys ){
-                    #     ## 100 for Global Administrator, 99 for all others 
-                    #     $confidenceLevel = If( $highPrivilegedDirectoryTemplateRoleID -eq '62E90394-69F5-4237-9190-012177145E10' ){ 100 } Else { 99 }
-
-                    #     ## Get corresponding principal
-                    #     $principalObjectData = (Get-MgDirectoryObjectById -Ids $azureADPrivRoleAssignment.SubjectId)
-                    #     $principalID = $principalObjectData.Id
-                    #     $principalName = $null
-                    #     $principalType = 'Unknown'
-                    #     $highPrivReason = "High privileged PIM-assigned directory Role: $($highPrivilegedDirectoryRoleTemplatesMap[$templateID])"
-                    #     If( $principalObjectData.AdditionalProperties ){
-                    #         ## Resolve principal
-                    #         $aadDirectoryObjType = $principalObjectData.AdditionalProperties['@odata.type']
-                    #         Switch($aadDirectoryObjType){
-                    #             '#microsoft.graph.user' {
-                    #                 $principalType = 'User'
-                    #                 $principalName = $principalObjectData.AdditionalProperties['userPrincipalName']
-                    #                 ## Add entry
-                    #                 __AAP-AddToHighPrivilegePrincipalMap -PrincipalID $principalID -PrincipalName $principalName -Reason $highPrivReason -PrincipalType $principalType -ConfidenceLevel $confidenceLevel
-                    #                 Break
-                    #             }
-                    #             '#microsoft.graph.group' {
-                    #                 $principalType = 'Group'
-                    #                 ## Resovle members
-                    #                 $securityIdentifier = $principalObjectData.AdditionalProperties['securityIdentifier']
-                    #                 $mgGroup = Get-MgGroup -Filter "securityIdentifier eq '$($securityIdentifier)'" -Top 1
-                    #                 If( $mgGroup ){
-                    #                     $mgGroupMembers = Get-MgGroupTransitiveMember -GroupId $mgGroup.Id
-                    #                     ForEach($mgGroupMember in $mgGroupMembers){
-                    #                         $principalID = $mgGroupMember.Id
-                    #                         $principalName = $null
-                    #                         $groupMemberObjType = $mgGroupMember.AdditionalProperties['@odata.type']
-                    #                         $highPrivReason = "Member of group ($($mgGroup.DisplayName)) with high privileged PIM-assigned directory Role: $($highPrivilegedDirectoryRoleTemplatesMap[$templateID])"
-                    #                         Switch($groupMemberObjType){
-                    #                             '#microsoft.graph.user' {
-                    #                                 $principalType = 'User'
-                    #                                 $principalName = $mgGroupMember.AdditionalProperties['userPrincipalName']
-                    #                                 Break
-                    #                             }
-                    #                             '#microsoft.graph.servicePrincipal' {
-                    #                                 $principalType = 'ServicePrincipal'
-                    #                                 $principalName = $mgGroupMember.AdditionalProperties['appDisplayName']
-                    #                                 Break
-                    #                             }
-                    #                         }
-                    #                         ## Add entry
-                    #                         __AAP-AddToHighPrivilegePrincipalMap -PrincipalID $principalID -PrincipalName $principalName -Reason $highPrivReason -PrincipalType $principalType -ConfidenceLevel $confidenceLevel
-                    #                     }
-                    #                 }
-                    #                 #$principalName = $principalObjectData.AdditionalProperties['displayName']
-                    #                 Break
-                    #             }
-                    #             '#microsoft.graph.servicePrincipal' {
-                    #                 $principalType = 'ServicePrincipal'
-                    #                 $principalName = $principalObjectData.AdditionalProperties['appDisplayName']
-                    #                 ## Add entry
-                    #                 __AAP-AddToHighPrivilegePrincipalMap -PrincipalID $principalID -PrincipalName $principalName -Reason $highPrivReason -PrincipalType $principalType -ConfidenceLevel $confidenceLevel
-                    #                 Break
-                    #             }
-                    #         }
-                    #     }
-                    # }
-                    #Write-Host "$($principalName) is $($privRoleDefinition.displayName) until $($azureADPrivRoleAssignment.EndDateTime)"
+                    $azureADPrivRoleAssignmentState = $azureADPrivRoleAssignment.AssignmentState
+                    __AAP-CheckIfMemberOfPrivilegedDirectoryRole `
+                        -PrincipalID $azureADPrivRoleAssignment.SubjectId `
+                        -NonHighPrivilegedRoleAssignments $nonHighPrivAssignments `
+                        -TemplateID $privRoleDefinition.ExternalId `
+                        -TemplateName $privRoleDefinition.DisplayName `
+                        -AssignedViaPIM `
+                        -PIMAssignmentEndDateTime $azureADPrivRoleAssignment.EndDateTime `
+                        -PIMAssignmentState $azureADPrivRoleAssignmentState
                 }
-                
             }
             $progressOperation = "$progressCount/$progressLimit"
             $progressPercentage = ($progressCount/$progressLimit)*100
@@ -1981,7 +1928,8 @@ Function Enumerate-MFAStatusOfHighPrivilegePrincipals {
             Else {
                 __AAP-Log "[X] $($firstEntry['principalType']): $($firstEntry['principalName']) ($($firstEntry['principalID'])): MFA is not supported for $($firstEntry['principalType'])s."  -MsgType $MESSAGE_FAIL
             }
-        }      
+            __AAP-Log "" ## empty newline
+        }
     }
 }
 
