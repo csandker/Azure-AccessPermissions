@@ -12,7 +12,7 @@ Background details can be found in the accompanied blog posts:
 To run this script you'll need these two PowerShell modules:
 - [Microsoft.Graph](https://github.com/microsoftgraph/msgraph-sdk-powershell)
 - [AADInternals](https://github.com/Gerenios/AADInternals)
-- [AzureADPreview]https://learn.microsoft.com/en-us/powershell/azure/active-directory/install-adv2?view=azureadps-2.0)
+- [AzureADPreview](https://learn.microsoft.com/en-us/powershell/azure/active-directory/install-adv2?view=azureadps-2.0)
 
 All of these can be installed directly within PowerShell:
 
